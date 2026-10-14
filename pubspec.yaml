@@ -1,0 +1,30 @@
+name: just_box_2d
+description: "Box2D v3.2 for Dart: a C layer of checked handles, batched reads, events, queries, character-mover queries and one-way platforms, built from source by a hook."
+version: 0.1.0
+homepage: https://github.com/just-unknown-dev/just-box-2d
+repository: https://github.com/just-unknown-dev/just-box-2d
+issue_tracker: https://github.com/just-unknown-dev/just-box-2d/issues
+
+topics:
+  - physics
+  - box2d
+  - ffi
+  - native-assets
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  # code_assets 2.0's only break (OS and Architecture are no longer const map
+  # keys) does not touch the hook, so both lines work.
+  code_assets: ">=1.2.0 <3.0.0"
+  hooks: ^2.0.0
+  native_toolchain_c: ^0.19.3
+
+dev_dependencies:
+  # The example and the tests allocate native memory.
+  ffi: ^2.1.0
+  # Generates lib/src/native/bindings.g.dart (see ffigen.yaml).
+  ffigen: ^12.0.0
+  lints: ^6.0.0
+  test: ^1.26.0

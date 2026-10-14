@@ -1,0 +1,69 @@
+llvm-path:
+  - 'C:\Program Files\LLVM'
+  - 'C:\Program Files (x86)\LLVM'
+
+name: Box2DBindings
+description: >
+  Bindings to just_box_2d's C layer (src/b2w/box2d_wrapper.h). Box2D's own
+  headers are not parsed: the layer is the whole surface.
+output: 'lib/src/native/bindings.g.dart'
+
+# Top-level @Native functions resolved through the code asset the build hook
+# bundles (hook/build.dart, assetName 'just_box_2d'), so the library is found
+# by asset id on every platform rather than by a file name.
+ffi-native:
+  assetId: 'package:just_box_2d/just_box_2d'
+
+headers:
+  entry-points:
+    - 'src/b2w/box2d_wrapper.h'
+  include-directives:
+    - 'src/b2w/box2d_wrapper.h'
+
+functions:
+  include:
+    - 'b2w_.*'
+  # Addresses (`addresses.…`): the finalizers, for NativeFinalizer, and the
+  # symbols `Box2D` resolves up front to prove the bundled library matches
+  # these bindings.
+  symbol-address:
+    include:
+      - 'b2w_finalizer_.*'
+      - 'b2w_version'
+      - 'b2w_createBody'
+      - 'b2w_setBodyTransform'
+      - 'b2w_setBodyType'
+      - 'b2w_getBodyType'
+      - 'b2w_setBodyOneWay'
+      - 'b2w_castRayClosest'
+      - 'b2w_castRayAll'
+      - 'b2w_queryAABB'
+      - 'b2w_setBodyFilter64'
+      - 'b2w_setBodyFriction'
+      - 'b2w_setBodyRestitution'
+      - 'b2w_setBodyLinearDamping'
+      - 'b2w_setBodyAngularDamping'
+      - 'b2w_setBodySleepEnabled'
+      - 'b2w_moverCollide'
+      - 'b2w_moverCast'
+
+globals:
+  exclude:
+    - '.*'
+
+structs:
+  exclude:
+    - '.*'
+
+enums:
+  exclude:
+    - '.*'
+
+comments:
+  style: any
+  length: full
+
+preamble: |
+  // AUTO-GENERATED — do not edit.
+  // Regenerate with: dart run ffigen --config ffigen.yaml
+  // ignore_for_file: type=lint, camel_case_types, non_constant_identifier_names

@@ -1,0 +1,4 @@
+# Box2D's worlds (128 slots) and the finalizer queue belong to the process,
+# and `dart test` runs test files as isolates of one process: one file at a
+# time.
+concurrency: 1
