@@ -15,29 +15,28 @@ import '' as self;
 @ffi.Native<ffi.Int32 Function()>()
 external int b2w_version();
 
-/// Create a Box2D world with a native thread pool injected into the task system.
-/// numThreads <= 0 → cores - 1, at most 4.
-/// Returns packed int64 world handle; 0 on failure (every world slot taken).
+/// Create a world with gravity (gravityX, gravityY) and a thread pool of its
+/// own for Box2D's work. numThreads <= 0 → cores - 1, at most 4.
+/// Returns its handle; 0 when every world slot is taken (Box2D has 128).
 @ffi.Native<ffi.Int64 Function(ffi.Float, ffi.Float, ffi.Int32)>()
 external int b2w_createWorld(double gravityX, double gravityY, int numThreads);
 
-/// Destroy a Box2D world and its associated thread pool.
-/// The pool is destroyed AFTER b2DestroyWorld to allow any in-flight
-/// finishTask calls to complete.
+/// Destroy a world with everything in it, then its thread pool.
 @ffi.Native<ffi.Void Function(ffi.Int64)>()
 external void b2w_destroyWorld(int worldHandle);
 
-/// Advance the simulation by timeStep seconds with subSteps internal iterations.
-/// Box2D 3.0 recommends subSteps = 4 for most games.
+/// Advance the world by timeStep seconds in subSteps sub-steps (Box2D
+/// recommends 4). The events read below are this step's until the next one.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Int32)>()
 external void b2w_step(int worldHandle, double timeStep, int subSteps);
 
-/// Overwrite world gravity at runtime.
+/// Change the world's gravity.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_setGravity(int worldHandle, double gx, double gy);
 
-/// Create a dynamic (simulated) body. Returns packed int64 body handle; 0
-/// when the world has gone.
+/// Create a dynamic body at (posX, posY), turned by angle. Returns its
+/// handle; 0 when the world has gone. Same as b2w_createBody with
+/// B2W_BODY_DYNAMIC.
 @ffi.Native<ffi.Int64 Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Float)>()
 external int b2w_createDynamicBody(
   int worldHandle,
@@ -46,8 +45,7 @@ external int b2w_createDynamicBody(
   double angle,
 );
 
-/// Create a static (immovable) body. Returns packed int64 body handle; 0
-/// when the world has gone.
+/// Create a static body. Same as b2w_createBody with B2W_BODY_STATIC.
 @ffi.Native<ffi.Int64 Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Float)>()
 external int b2w_createStaticBody(
   int worldHandle,
@@ -56,11 +54,11 @@ external int b2w_createStaticBody(
   double angle,
 );
 
-/// Destroy a body and detach all its shapes.
+/// Destroy a body with its shapes, chains and joints.
 @ffi.Native<ffi.Void Function(ffi.Int64)>()
 external void b2w_destroyBody(int bodyHandle);
 
-/// Attach a circle fixture to a body, centred at (cx, cy) in body space.
+/// Attach a circle centred at (cx, cy).
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -82,7 +80,7 @@ external void b2w_addCircleShape(
   double restitution,
 );
 
-/// Attach a box (axis-aligned rectangle) fixture. halfW/halfH are half-extents.
+/// Attach a box centred on the body's origin. halfW/halfH are half-extents.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -102,9 +100,10 @@ external void b2w_addBoxShape(
   double restitution,
 );
 
-/// Attach a convex polygon fixture.
-/// verts: interleaved (x0,y0, x1,y1, ...) array of `count` vertices.
-/// Box2D 3.0 will compute the convex hull internally.
+/// Attach a convex polygon. verts: count points as x0, y0, x1, y1, …; Box2D
+/// takes their convex hull. More than 8 points (Box2D's limit) are cut into
+/// a fan of pieces that share the first point, so the body keeps the whole
+/// shape. Fewer than 3 attach nothing.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -124,8 +123,9 @@ external void b2w_addPolygonShape(
   double restitution,
 );
 
-/// Attach a convex polygon with rounded corners (Box2D radius parameter).
-/// verts: interleaved (x0,y0, x1,y1, ...) array of `count` vertices.
+/// Attach a convex polygon grown by cornerRadius, which rounds its corners.
+/// verts as for b2w_addPolygonShape, cut the same way past 8 points (the
+/// pieces then overlap along their seams by the rounding).
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -147,8 +147,8 @@ external void b2w_addRoundedPolygonShape(
   double restitution,
 );
 
-/// Attach a capsule (two circles of equal radius joined by a segment).
-/// (cx1,cy1) and (cx2,cy2) are the two center offsets relative to body origin.
+/// Attach a capsule: the segment from (cx1, cy1) to (cx2, cy2) grown by
+/// radius.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -174,7 +174,8 @@ external void b2w_addCapsuleShape(
   double restitution,
 );
 
-/// Attach a single line-segment fixture (static geometry).
+/// Attach a line segment from (x1, y1) to (x2, y2). It has no area, so it
+/// adds no mass; use it on static bodies.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -198,13 +199,13 @@ external void b2w_addSegmentShape(
   double restitution,
 );
 
-/// Attach a chain-of-segments fixture.
-/// points: interleaved (x0,y0, x1,y1, ...) array of `count` vertices.
-/// If loop != 0 the last point connects back to the first. At least 4
-/// points; an open chain's first and last are ghosts that only shape its
-/// ends.
-/// Returns a packed int64 chain handle (0 for too few points or a dead body);
-/// pass to b2w_destroyChain to remove it.
+/// Attach a chain of segments. points: count points as x0, y0, x1, y1, …;
+/// loop != 0 joins the last back to the first. At least 4 points; an open
+/// chain's first and last are ghosts that only shape its ends. A chain is
+/// one-sided: it collides on the right of its direction (counter-clockwise
+/// points face out) and sensors never see it.
+/// Returns its handle, for b2w_destroyChain; 0 for too few points or a dead
+/// body.
 @ffi.Native<
   ffi.Int64 Function(
     ffi.Int64,
@@ -224,39 +225,30 @@ external int b2w_addChainShape(
   double restitution,
 );
 
-/// Destroy a chain shape previously created with b2w_addChainShape.
+/// Destroy a chain made by b2w_addChainShape.
 @ffi.Native<ffi.Void Function(ffi.Int64)>()
 external void b2w_destroyChain(int chainHandle);
 
-/// Apply a force at the body's mass centre (accumulates until next step).
+/// Apply a force at the body's centre of mass, for the next step.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_applyForce(int bodyHandle, double fx, double fy);
 
-/// Apply an instantaneous linear impulse at the body's mass centre.
+/// Apply an impulse at the body's centre of mass: its velocity changes now.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_applyLinearImpulse(int bodyHandle, double ix, double iy);
 
-/// Apply a torque (angular force) to the body.
+/// Apply a torque, for the next step.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_applyTorque(int bodyHandle, double torque);
 
-/// Directly set the linear velocity (bypasses force accumulation).
+/// Set the body's velocity.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_setLinearVelocity(int bodyHandle, double vx, double vy);
 
-/// ── Zero-copy bulk transform extraction ──────────────────────────────────────
-///
-/// Designed for the hot path after each physics step.
-/// Both buffers are allocated by Dart via calloc and passed in — no heap
-/// allocation occurs inside this function.
-///
-/// `handles`  Pointer to a Dart calloc<Int64>(n) buffer of packed body IDs.
-/// `buffer`   Pointer to a Dart calloc<Float>(n*7) buffer.
-/// Layout per body:
-/// [posX, posY, angle, velX, velY, isAwake(1.0/0.0), angularVel]
-/// `count`    Number of bodies.
-///
-/// Dart reads the result via Pointer<Float>.asTypedList(n*7) — zero copy.
+/// Read count bodies at once, after a step. handles: count body handles.
+/// buffer: count * 7 floats, written per body as
+/// [posX, posY, angle, velX, velY, isAwake (1 or 0), angularVelocity]
+/// A dead handle's seven are zeros.
 @ffi.Native<
   ffi.Void Function(ffi.Pointer<ffi.Int64>, ffi.Pointer<ffi.Float>, ffi.Int32)
 >()
@@ -266,12 +258,12 @@ external void b2w_bulkExtractTransforms(
   int count,
 );
 
-/// Number of begin-touch contact events from the last step.
+/// How many contacts began in the last step.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getContactBeginCount(int worldHandle);
 
-/// Read one begin-touch event by index.
-/// Writes packed body handles and contact normal into the out-parameters.
+/// Read the index-th contact that began: the two bodies, and the contact
+/// normal, pointing from A to B (zeros if the contact has gone since).
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -291,11 +283,11 @@ external void b2w_getContactBeginEvent(
   ffi.Pointer<ffi.Float> outNormalY,
 );
 
-/// Number of end-touch contact events from the last step.
+/// How many contacts ended in the last step.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getContactEndCount(int worldHandle);
 
-/// Read one end-touch event by index.
+/// Read the index-th contact that ended.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -311,12 +303,12 @@ external void b2w_getContactEndEvent(
   ffi.Pointer<ffi.Int64> outBodyB,
 );
 
-/// Number of sensor-begin events from the last step.
+/// How many overlaps began in the last step.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getSensorBeginCount(int worldHandle);
 
-/// Read one sensor-begin event by index.
-/// Writes the sensor body and visitor body as packed int64 handles.
+/// Read the index-th overlap that began: the sensor's body and the body
+/// that entered it.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -332,11 +324,11 @@ external void b2w_getSensorBeginEvent(
   ffi.Pointer<ffi.Int64> outVisitorBody,
 );
 
-/// Number of sensor-end events from the last step.
+/// How many overlaps ended in the last step.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getSensorEndCount(int worldHandle);
 
-/// Read one sensor-end event by index.
+/// Read the index-th overlap that ended.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -352,11 +344,17 @@ external void b2w_getSensorEndEvent(
   ffi.Pointer<ffi.Int64> outVisitorBody,
 );
 
-/// Mark all shapes on a body as sensor (isSensor != 0) or solid (isSensor == 0).
+/// Make the shapes added to the body from now on sensors (isSensor != 0) or
+/// solid (0). Call it before adding them: shapes already on the body keep
+/// what they are, as Box2D cannot change a shape between the two.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodySensor(int bodyHandle, int isSensor);
 
-/// Set the collision filter on all shapes of a body.
+/// Set the collision filter of every shape on the body (chains included),
+/// with 32-bit category and mask bits. Two shapes collide when each one's
+/// mask has a bit of the other's category, unless they share a groupIndex:
+/// then a positive group always collides and a negative one never does.
+/// b2w_setBodyFilter64 takes all 64 bits.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Uint32, ffi.Uint32, ffi.Int32)>()
 external void b2w_setBodyFilter(
   int bodyHandle,
@@ -365,55 +363,46 @@ external void b2w_setBodyFilter(
   int groupIndex,
 );
 
-/// Enable or disable Continuous Collision Detection (bullet mode) on a body.
-/// isBullet != 0 → CCD enabled; prevents fast bodies from tunnelling through
-/// thin static geometry. Only meaningful for dynamic bodies.
+/// Turn continuous collision against other moving bodies on (isBullet != 0)
+/// or off, for a small fast body that would pass through them. Box2D already
+/// keeps every dynamic body from passing through static ones.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodyBullet(int bodyHandle, int isBullet);
 
-/// Scale gravity's effect on a body. 1.0 = normal gravity (the default),
-/// 0.0 = unaffected by world gravity (matches PhysicsBody.useGravity = false).
+/// Scale the world's gravity for this body: 1 is normal, 0 none.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyGravityScale(int bodyHandle, double gravityScale);
 
-/// Force a body's awake/asleep state. Bodies default to awake at creation;
-/// use this to start a body asleep (matches PhysicsBody.isAwake = false).
-/// Not needed to WAKE a body — collisions and applied forces/impulses do
-/// that automatically, and b2w_bulkExtractTransforms reports the resulting
-/// state back every step.
+/// Wake the body (awake != 0) or put it to sleep. A body sleeps by itself
+/// once it rests, and contacts, forces and impulses wake it.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodyAwake(int bodyHandle, int awake);
 
-/// Allow or forbid a body to fall asleep. enabled == 0 keeps it awake (and
-/// simulated) for as long as it exists, at rest or not; bodies may sleep by
-/// default.
+/// Allow the body to sleep (enabled != 0, the default) or keep it awake for
+/// as long as it exists.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodySleepEnabled(int bodyHandle, int enabled);
 
-/// Lock or unlock a body's rotation. fixed != 0 → the body's angle never
-/// changes, regardless of torque/angular impulses from collisions (e.g.
-/// friction against a static obstacle) — the standard fix for top-down
-/// characters that should slide, not tumble, when they clip scenery.
-/// Only meaningful for dynamic bodies.
+/// Lock the body's rotation (fixed != 0): nothing turns it, not torques nor
+/// contacts. Its movement stays free.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodyFixedRotation(int bodyHandle, int fixed);
 
-/// Override a body's simulated mass, replacing Box2D's density-derived value.
-///
-/// Box2D computes mass from shape area × density (b2ShapeDef.density, always
-/// passed as 1.0 or 0.0 by this wrapper — see b2w_addCircleShape etc.), NOT
-/// from any gameplay-facing "mass" the caller intended. Without this call, a
-/// body's actual simulated mass silently depends on its shape's area (e.g. a
-/// circle of radius 5 masses ~78.5, not 1.0), decoupling force/impulse
-/// magnitudes and collision response from PhysicsBody.mass. Preserves the
-/// shape-derived center of mass and scales rotationalInertia proportionally
-/// so the mass/inertia ratio — and therefore angular response — is
-/// unaffected by the override. Call after all shape fixtures are attached.
+/// Give the body this mass instead of the one its shapes' density adds up
+/// to. The centre of mass stays where the shapes put it, and the rotational
+/// inertia scales with the mass, so the body turns as before. Call it after
+/// adding the shapes (adding one sums the mass again), and again after
+/// b2w_setBodyType.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyMass(int bodyHandle, double mass);
 
-/// Install or replace the impact callback for a world.
-/// Pass NULL to remove the callback.
+/// Have b2w_step call callback for every contact whose shapes closed faster
+/// than speedThreshold (units per second) in that step, with the two bodies
+/// and that speed: Box2D's hit events. It is called on the thread that called
+/// b2w_step, after the step and before b2w_step returns; it must not call
+/// back into this library (a Dart NativeCallable.listener, which only queues
+/// the call, is the way to receive it). NULL removes the callback, and with
+/// no callback Box2D gathers no hit events.
 @ffi.Native<ffi.Void Function(ffi.Int64, ImpactCallbackFn, ffi.Float)>()
 external void b2w_setImpactCallback(
   int worldHandle,
@@ -421,15 +410,13 @@ external void b2w_setImpactCallback(
   double speedThreshold,
 );
 
-/// Number of body-move events from the last step.
-/// A body-move event fires for every dynamic body that moved, including when it
-/// goes to sleep (check fellAsleep flag).
+/// How many bodies moved in the last step, including those that fell asleep
+/// at the end of it.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getBodyMoveEventCount(int worldHandle);
 
-/// Read one body-move event by index.
-/// outBodyHandle: packed body int64 handle.
-/// outFellAsleep: 1 if the body fell asleep this step, else 0.
+/// Read the index-th body that moved, and whether it fell asleep (1) or not
+/// (0).
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -445,7 +432,7 @@ external void b2w_getBodyMoveEvent(
   ffi.Pointer<ffi.Int32> outFellAsleep,
 );
 
-/// Create a revolute joint (hinge) between two bodies at a shared world anchor.
+/// A hinge: the bodies turn freely about the anchor they share.
 @ffi.Native<
   ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
 >()
@@ -457,7 +444,8 @@ external int b2w_createRevoluteJoint(
   double anchorY,
 );
 
-/// Create a prismatic (slider) joint along the given world axis.
+/// A slider: bodyB moves along the axis through the anchor, and the two do
+/// not turn against each other.
 @ffi.Native<
   ffi.Int64 Function(
     ffi.Int64,
@@ -479,7 +467,9 @@ external int b2w_createPrismaticJoint(
   double axisY,
 );
 
-/// Create a distance joint keeping bodies within [minLen, maxLen].
+/// A rope or rod between the two bodies' origins: their distance stays
+/// within [minLen, maxLen], free in between and rigid at the ends; equal
+/// lengths make a rigid rod. b2w_setDistanceSpring makes it springy.
 @ffi.Native<
   ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
 >()
@@ -491,16 +481,7 @@ external int b2w_createDistanceJoint(
   double maxLen,
 );
 
-/// Create a mouse joint that pulls bodyB toward a target point.
-@ffi.Native<ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)>()
-external int b2w_createMouseJoint(
-  int worldHandle,
-  int bodyB,
-  double targetX,
-  double targetY,
-);
-
-/// Create a weld (rigid) joint locking two bodies at a world anchor.
+/// Weld the bodies together at the anchor, as they are now.
 @ffi.Native<
   ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
 >()
@@ -512,7 +493,8 @@ external int b2w_createWeldJoint(
   double anchorY,
 );
 
-/// Create a wheel joint (body attached via spring along an axis).
+/// A wheel: bodyB turns freely about the anchor and moves on a spring along
+/// the axis (suspension; 4 Hz, damping ratio 0.7 until b2w_setWheelSpring).
 @ffi.Native<
   ffi.Int64 Function(
     ffi.Int64,
@@ -534,11 +516,12 @@ external int b2w_createWheelJoint(
   double axisY,
 );
 
-/// Destroy a joint by handle.
+/// Destroy a joint.
 @ffi.Native<ffi.Void Function(ffi.Int64)>()
 external void b2w_destroyJoint(int jointHandle);
 
-/// Enable/disable revolute joint limits.
+/// Limit a revolute joint's angle to [lower, upper] radians (enable != 0)
+/// or free it.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Int32)>()
 external void b2w_setRevoluteLimits(
   int jointHandle,
@@ -547,7 +530,8 @@ external void b2w_setRevoluteLimits(
   int enable,
 );
 
-/// Enable/disable revolute joint motor.
+/// Drive a revolute joint at speed (radians per second) with up to maxTorque
+/// (enable != 0), or turn the motor off.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Int32)>()
 external void b2w_setRevoluteMotor(
   int jointHandle,
@@ -556,7 +540,8 @@ external void b2w_setRevoluteMotor(
   int enable,
 );
 
-/// Enable/disable prismatic joint limits.
+/// Limit a prismatic joint's travel to [lower, upper] along its axis
+/// (enable != 0), or free it.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Int32)>()
 external void b2w_setPrismaticLimits(
   int jointHandle,
@@ -565,7 +550,8 @@ external void b2w_setPrismaticLimits(
   int enable,
 );
 
-/// Enable/disable prismatic joint motor.
+/// Drive a prismatic joint at speed (units per second) with up to maxForce
+/// (enable != 0), or turn the motor off.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Int32)>()
 external void b2w_setPrismaticMotor(
   int jointHandle,
@@ -574,7 +560,7 @@ external void b2w_setPrismaticMotor(
   int enable,
 );
 
-/// Set distance joint length range.
+/// Change a distance joint's range. Its rest length becomes the middle of it.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_setDistanceLimits(
   int jointHandle,
@@ -582,27 +568,29 @@ external void b2w_setDistanceLimits(
   double maxLen,
 );
 
-/// Set distance joint spring (stiffness + damping, 0 = rigid).
+/// Give a distance joint a spring that pulls toward its rest length (the
+/// middle of its range): hertz is how fast it swings, dampingRatio how soon
+/// it settles (0 never, 1 without overshoot). With an open range the ends
+/// still stop it; with equal lengths there is only the spring. hertz 0
+/// takes the spring away.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_setDistanceSpring(
   int jointHandle,
-  double stiffness,
-  double damping,
+  double hertz,
+  double dampingRatio,
 );
 
-/// Update the mouse joint target position.
-@ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
-external void b2w_setMouseJointTarget(int jointHandle, double x, double y);
-
-/// Set wheel joint spring stiffness and damping.
+/// Set a wheel joint's suspension: hertz, and dampingRatio as for
+/// b2w_setDistanceSpring.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float)>()
 external void b2w_setWheelSpring(
   int jointHandle,
-  double stiffness,
-  double damping,
+  double hertz,
+  double dampingRatio,
 );
 
-/// Enable/disable wheel joint motor.
+/// Drive a wheel joint's wheel at speed (radians per second) with up to
+/// maxTorque (enable != 0), or turn the motor off.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Int32)>()
 external void b2w_setWheelMotor(
   int jointHandle,
@@ -611,7 +599,7 @@ external void b2w_setWheelMotor(
   int enable,
 );
 
-/// Get the reaction force on joint bodyA (world-space, per second).
+/// The force the joint applied in the last step, in world space.
 @ffi.Native<
   ffi.Void Function(ffi.Int64, ffi.Pointer<ffi.Float>, ffi.Pointer<ffi.Float>)
 >()
@@ -621,12 +609,12 @@ external void b2w_getJointReactionForce(
   ffi.Pointer<ffi.Float> outFy,
 );
 
-/// Get the reaction torque on joint bodyA (per second).
+/// The torque the joint applied in the last step.
 @ffi.Native<ffi.Float Function(ffi.Int64)>()
 external double b2w_getJointReactionTorque(int jointHandle);
 
-/// Create a body of any type. b2w_createDynamicBody / b2w_createStaticBody
-/// remain as thin forwarders so existing bindings keep working unchanged.
+/// Create a body of bodyType (a B2W_BODY_* value) at (posX, posY), turned by
+/// angle. Returns its handle; 0 when the world has gone.
 @ffi.Native<
   ffi.Int64 Function(ffi.Int64, ffi.Int32, ffi.Float, ffi.Float, ffi.Float)
 >()
@@ -638,16 +626,10 @@ external int b2w_createBody(
   double angle,
 );
 
-/// Teleport a body to a world transform.
-///
-/// Box2D documents SetTransform as "fairly expensive" — it rebuilds broad-phase
-/// proxies and discards the solver's warm-start for this body. Call it for
-/// respawns, checkpoints, level loads and warps; drive ordinary motion with
-/// velocity instead.
-///
-/// wake != 0 also forces the body awake. b2Body_SetTransform on its own does
-/// NOT wake it, so a teleported sleeping body would otherwise sit inert at the
-/// new location until something else disturbed it.
+/// Teleport a body. Box2D calls this fairly expensive (it moves the body's
+/// shapes in the broad phase and drops their contacts' warm start): use it
+/// for respawns, checkpoints and warps, and velocity for ordinary motion.
+/// wake != 0 wakes the body too, which moving it alone does not.
 @ffi.Native<
   ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Float, ffi.Int32)
 >()
@@ -659,27 +641,23 @@ external void b2w_setBodyTransform(
   int wake,
 );
 
-/// Set angular velocity directly (companion to b2w_setLinearVelocity).
+/// Set the body's angular velocity (radians per second).
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setAngularVelocity(int bodyHandle, double omega);
 
-/// Change a body's type at runtime.
-///
-/// EXPENSIVE, and it RESETS the mass override — re-apply b2w_setBodyMass after
-/// any real change. Callers should skip the call entirely when the type
-/// already matches (see b2w_getBodyType).
+/// Change a body's type. Expensive, and it sums the mass from the shapes
+/// again (call b2w_setBodyMass after it). The type it already has does
+/// nothing.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodyType(int bodyHandle, int bodyType);
 
+/// The body's type; B2W_BODY_STATIC for a dead handle.
 @ffi.Native<ffi.Int32 Function(ffi.Int64)>()
 external int b2w_getBodyType(int bodyHandle);
 
-/// Drive a kinematic body toward a target transform over one timeStep by
-/// setting the velocity that gets there.
-///
-/// Preferred over teleporting moving platforms: it preserves correct contact
-/// velocity, so a body standing on the platform is carried along instead of
-/// being left behind.
+/// Move a kinematic body to a transform over the next timeStep, by giving it
+/// the velocity that gets it there. Bodies standing on it are carried along,
+/// which teleporting would not do. wake != 0 wakes it.
 @ffi.Native<
   ffi.Void Function(
     ffi.Int64,
@@ -699,9 +677,9 @@ external void b2w_setBodyTargetTransform(
   int wake,
 );
 
-/// Mark every shape on a body as a one-way / pass-through platform, solid only
-/// when approached from solidFromDirection (a B2W_ONEWAY_FROM_* value).
-/// enabled == 0 clears the flag and disables pre-solve events on the shapes.
+/// Make every shape on the body a one-way platform, solid only to what
+/// comes from solidFromDirection (a B2W_ONEWAY_FROM_* value; +y down), or
+/// solid again (enabled == 0). Applies to the shapes on the body now.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32, ffi.Int32)>()
 external void b2w_setBodyOneWay(
   int bodyHandle,
@@ -709,13 +687,10 @@ external void b2w_setBodyOneWay(
   int solidFromDirection,
 );
 
-/// Cast a ray, returning only the closest hit.
-/// translation is the FULL ray vector (direction * maxDistance), not a unit
-/// vector. Pass categoryBits = maskBits = ~0ull to hit everything.
-/// Returns 1 on hit (out-params written), 0 on miss.
-///
-/// NOTE: this ignores initial overlap — a ray starting inside a body does not
-/// report that body. Use b2w_castRayAll when that matters.
+/// Cast a ray and report the closest hit: the body, the point, the surface
+/// normal there, and how far along the ray it is (0 to 1). Returns 1 on a
+/// hit, 0 on none (the out-parameters are then not written). A ray passes
+/// the shapes it starts inside; b2w_castRayAll reports those.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Int64,
@@ -749,12 +724,12 @@ external int b2w_castRayClosest(
   ffi.Pointer<ffi.Float> outFraction,
 );
 
-/// Cast a ray, collecting up to maxHits hits, unsorted and one per SHAPE — a
-/// compound body can appear more than once, so de-duplicate on the Dart side.
-/// outBodies: caller-allocated int64[maxHits].
-/// outBuffer: caller-allocated float[maxHits*5], per hit:
+/// Cast a ray and report up to maxHits hits, in no order, one per shape (a
+/// body of several shapes can be there more than once). outBodies: maxHits
+/// handles. outBuffer: maxHits * 5 floats, per hit
 /// [pointX, pointY, normalX, normalY, fraction]
-/// Returns the number of hits written.
+/// A shape the ray starts inside is a hit at fraction 0, at the origin, with
+/// a zero normal. Returns how many it wrote.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Int64,
@@ -782,9 +757,10 @@ external int b2w_castRayAll(
   int maxHits,
 );
 
-/// Broad-phase AABB overlap. Reports bodies whose shapes' FAT AABBs overlap the
-/// box — a conservative superset. Narrow-test on the Dart side if exactness
-/// matters. Returns the number of body handles written to outBodies.
+/// Report up to maxBodies bodies, each once, with a shape whose bounding box
+/// (grown a little, as Box2D keeps it) overlaps the box: more than what
+/// truly overlaps, so test the shapes yourself when it matters. Returns how
+/// many it wrote to outBodies.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Int64,
@@ -810,13 +786,13 @@ external int b2w_queryAABB(
   int maxBodies,
 );
 
-/// The surfaces a mover at the origin touches, as Box2D collision planes.
-/// outPlanes: caller-allocated float[maxPlanes*5], per plane:
-/// [normalX, normalY, offset, pointX, pointY]; the normal points
-/// towards the mover, offset is how far the mover is into the
-/// surface's reach, and the point (on the surface) is relative to
-/// the origin. outBodies: the body of each plane.
-/// Returns the number of planes written.
+/// The surfaces the mover touches, as Box2D collision planes. outPlanes:
+/// maxPlanes * 5 floats, per plane
+/// [normalX, normalY, offset, pointX, pointY]
+/// The normal points toward the mover; offset is how far the mover reaches
+/// into the surface; the point, on the surface, is relative to origin.
+/// outBodies: maxPlanes handles, the body of each plane. Returns how many
+/// planes it wrote.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Int64,
@@ -848,8 +824,9 @@ external int b2w_moverCollide(
   int maxPlanes,
 );
 
-/// How much of the translation a mover at the origin can move before it
-/// touches something, from 0 to 1. What it starts out touching is ignored.
+/// How much of translation the mover can travel before it touches
+/// something, from 0 to 1 (1: all of it). What it touches at the start does
+/// not stop it, and a chain stops it only from the chain's front.
 @ffi.Native<
   ffi.Float Function(
     ffi.Int64,
@@ -879,26 +856,26 @@ external double b2w_moverCast(
   int ignoreBody,
 );
 
-/// Velocity decay. Box2D's model is 1/(1 + dt*damping), which is not identical
-/// to the pure-Dart engine's (1 - drag*dt) but behaves equivalently.
+/// Slow the body's movement: its velocity v becomes v / (1 + h * damping)
+/// every sub-step of length h. 0, the default, never slows it.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyLinearDamping(int bodyHandle, double damping);
 
+/// Slow the body's turning the same way.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyAngularDamping(int bodyHandle, double damping);
 
-/// Set friction / restitution on every shape of a body. Takes effect on the
-/// next step — Box2D re-reads shape material each step. Use for ice, mud, and
-/// bounce pads that change state.
+/// Set the friction of every shape on the body (chains included), from the
+/// next step on: ice, mud.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyFriction(int bodyHandle, double friction);
 
+/// Set the restitution of every shape on the body (chains included), from
+/// the next step on: bounce pads.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Float)>()
 external void b2w_setBodyRestitution(int bodyHandle, double restitution);
 
-/// 64-bit collision filter. b2Filter.categoryBits/maskBits are uint64_t in this
-/// Box2D; the 32-bit b2w_setBodyFilter above is kept unchanged so existing
-/// bindings stay ABI-correct.
+/// b2w_setBodyFilter with all 64 bits of category and mask.
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Uint64, ffi.Uint64, ffi.Int32)>()
 external void b2w_setBodyFilter64(
   int bodyHandle,
@@ -907,18 +884,13 @@ external void b2w_setBodyFilter64(
   int groupIndex,
 );
 
-/// NativeFinalizer requires a native function with signature void(void*).
-/// These wrappers receive the packed int64 handle reinterpreted as a void*
-/// token (set via Pointer<Void>.fromAddress(handle) on the Dart side), cast
-/// it back to int64_t, and queue the destroy: the GC may call them on any
-/// thread, so the next b2w_* call from Dart (a create, destroy or step)
-/// performs it. Only used as safety-net GC finalizers — prefer explicit
-/// dispose(). Use Box2D from one isolate per process. On a 32-bit platform the
-/// token keeps only a body handle's low 32 bits, so a body's finalizer does
-/// nothing there; the body goes with its world.
+/// Queue a world for destruction.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
 external void b2w_finalizer_world(ffi.Pointer<ffi.Void> token);
 
+/// Queue a body for destruction. On a 32-bit platform a pointer keeps only a
+/// body handle's low 32 bits, so this does nothing there: the body goes with
+/// its world.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
 external void b2w_finalizer_body(ffi.Pointer<ffi.Void> token);
 
@@ -926,152 +898,14 @@ const addresses = _SymbolAddresses();
 
 class _SymbolAddresses {
   const _SymbolAddresses();
-  ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function()>> get b2w_version =>
-      ffi.Native.addressOf(self.b2w_version);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Int32)>>
-  get b2w_setBodySleepEnabled =>
-      ffi.Native.addressOf(self.b2w_setBodySleepEnabled);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Int64 Function(ffi.Int64, ffi.Int32, ffi.Float, ffi.Float, ffi.Float)
-    >
-  >
-  get b2w_createBody => ffi.Native.addressOf(self.b2w_createBody);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Void Function(ffi.Int64, ffi.Float, ffi.Float, ffi.Float, ffi.Int32)
-    >
-  >
-  get b2w_setBodyTransform => ffi.Native.addressOf(self.b2w_setBodyTransform);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Int32)>>
-  get b2w_setBodyType => ffi.Native.addressOf(self.b2w_setBodyType);
-  ffi.Pointer<ffi.NativeFunction<ffi.Int32 Function(ffi.Int64)>>
-  get b2w_getBodyType => ffi.Native.addressOf(self.b2w_getBodyType);
-  ffi.Pointer<
-    ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Int32, ffi.Int32)>
-  >
-  get b2w_setBodyOneWay => ffi.Native.addressOf(self.b2w_setBodyOneWay);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Int32 Function(
-        ffi.Int64,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Uint64,
-        ffi.Uint64,
-        ffi.Pointer<ffi.Int64>,
-        ffi.Pointer<ffi.Float>,
-        ffi.Pointer<ffi.Float>,
-        ffi.Pointer<ffi.Float>,
-        ffi.Pointer<ffi.Float>,
-        ffi.Pointer<ffi.Float>,
-      )
-    >
-  >
-  get b2w_castRayClosest => ffi.Native.addressOf(self.b2w_castRayClosest);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Int32 Function(
-        ffi.Int64,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Uint64,
-        ffi.Uint64,
-        ffi.Pointer<ffi.Int64>,
-        ffi.Pointer<ffi.Float>,
-        ffi.Int32,
-      )
-    >
-  >
-  get b2w_castRayAll => ffi.Native.addressOf(self.b2w_castRayAll);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Int32 Function(
-        ffi.Int64,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Uint64,
-        ffi.Uint64,
-        ffi.Pointer<ffi.Int64>,
-        ffi.Int32,
-      )
-    >
-  >
-  get b2w_queryAABB => ffi.Native.addressOf(self.b2w_queryAABB);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Int32 Function(
-        ffi.Int64,
-        ffi.Float,
-        ffi.Float,
-        ffi.Pointer<ffi.Float>,
-        ffi.Int32,
-        ffi.Float,
-        ffi.Uint64,
-        ffi.Uint64,
-        ffi.Int64,
-        ffi.Pointer<ffi.Float>,
-        ffi.Pointer<ffi.Int64>,
-        ffi.Int32,
-      )
-    >
-  >
-  get b2w_moverCollide => ffi.Native.addressOf(self.b2w_moverCollide);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Float Function(
-        ffi.Int64,
-        ffi.Float,
-        ffi.Float,
-        ffi.Pointer<ffi.Float>,
-        ffi.Int32,
-        ffi.Float,
-        ffi.Float,
-        ffi.Float,
-        ffi.Uint64,
-        ffi.Uint64,
-        ffi.Int64,
-      )
-    >
-  >
-  get b2w_moverCast => ffi.Native.addressOf(self.b2w_moverCast);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Float)>>
-  get b2w_setBodyLinearDamping =>
-      ffi.Native.addressOf(self.b2w_setBodyLinearDamping);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Float)>>
-  get b2w_setBodyAngularDamping =>
-      ffi.Native.addressOf(self.b2w_setBodyAngularDamping);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Float)>>
-  get b2w_setBodyFriction => ffi.Native.addressOf(self.b2w_setBodyFriction);
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int64, ffi.Float)>>
-  get b2w_setBodyRestitution =>
-      ffi.Native.addressOf(self.b2w_setBodyRestitution);
-  ffi.Pointer<
-    ffi.NativeFunction<
-      ffi.Void Function(ffi.Int64, ffi.Uint64, ffi.Uint64, ffi.Int32)
-    >
-  >
-  get b2w_setBodyFilter64 => ffi.Native.addressOf(self.b2w_setBodyFilter64);
   ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>
   get b2w_finalizer_world => ffi.Native.addressOf(self.b2w_finalizer_world);
   ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>
   get b2w_finalizer_body => ffi.Native.addressOf(self.b2w_finalizer_body);
 }
 
-/// ── NativeCallable.listener — cross-thread collision audio callback ───────────
-///
-/// Register a Dart function (via NativeCallable<ImpactCallbackC>.listener)
-/// that fires on the Dart main isolate whenever a collision's approach speed
-/// exceeds speedThreshold.
-///
-/// Box2D steps on worker threads; NativeCallable.listener safely marshals
-/// the call to the main Dart isolate's event loop.
+/// What b2w_setImpactCallback calls: the two bodies, and the speed (units
+/// per second) their shapes closed at.
 typedef ImpactCallbackFn =
     ffi.Pointer<ffi.NativeFunction<ImpactCallbackFnFunction>>;
 typedef ImpactCallbackFnFunction =

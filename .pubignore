@@ -27,6 +27,10 @@ API.md
 # Build outputs
 build/
 
+# Box2D's own build and debugger files; the hook compiles its sources directly
+src/box2d/src/CMakeLists.txt
+src/box2d/src/box2d.natvis
+
 # OS files
 .DS_Store
 Thumbs.db

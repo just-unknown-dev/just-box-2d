@@ -23,29 +23,10 @@ headers:
 functions:
   include:
     - 'b2w_.*'
-  # Addresses (`addresses.…`): the finalizers, for NativeFinalizer, and the
-  # symbols `Box2D` resolves up front to prove the bundled library matches
-  # these bindings.
+  # NativeFinalizer needs these addresses (`addresses.…`).
   symbol-address:
     include:
       - 'b2w_finalizer_.*'
-      - 'b2w_version'
-      - 'b2w_createBody'
-      - 'b2w_setBodyTransform'
-      - 'b2w_setBodyType'
-      - 'b2w_getBodyType'
-      - 'b2w_setBodyOneWay'
-      - 'b2w_castRayClosest'
-      - 'b2w_castRayAll'
-      - 'b2w_queryAABB'
-      - 'b2w_setBodyFilter64'
-      - 'b2w_setBodyFriction'
-      - 'b2w_setBodyRestitution'
-      - 'b2w_setBodyLinearDamping'
-      - 'b2w_setBodyAngularDamping'
-      - 'b2w_setBodySleepEnabled'
-      - 'b2w_moverCollide'
-      - 'b2w_moverCast'
 
 globals:
   exclude:

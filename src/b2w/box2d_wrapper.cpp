@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cfloat>
 #include <cmath>
 #include <memory>
 #include <mutex>
@@ -25,21 +26,20 @@
 
 struct WorldState {
     ThreadPool*      pool;
+    // Fed from Box2D's hit events; how fast a hit must be is the world's hit
+    // event threshold (see b2w_setImpactCallback).
     ImpactCallbackFn impactCallback;
-    float            impactThreshold;
     b2ContactEvents  lastContacts;
     b2SensorEvents   lastSensors;
 };
-
-// Separate mutex for g_sensorFlags: shape-creation functions read it while
-// b2w_setBodySensor writes it. Using a dedicated lock avoids contention with
-// g_worldsMutex and prevents the TOCTOU race between the two operations.
 
 static std::unordered_map<int64_t, WorldState> g_worlds;
 static std::mutex g_worldsMutex;
 
 // Per-body sensor flag: set via b2w_setBodySensor BEFORE adding shapes so the
-// shape creation functions can apply isSensor to b2ShapeDef at creation time.
+// shape creation functions can apply isSensor to b2ShapeDef at creation time
+// (Box2D cannot turn a shape into a sensor, or back, once it exists). It has
+// a lock of its own, so reading it never waits on g_worldsMutex.
 static std::unordered_map<int64_t, bool> g_sensorFlags;
 static std::mutex g_sensorMutex;
 
@@ -904,6 +904,9 @@ extern "C" int64_t b2w_createWorld(float gx, float gy, int32_t numThreads) {
     def.enqueueTask         = s_enqueueTask;
     def.finishTask          = s_finishTask;
     def.restitutionCallback = _minRestitutionCallback;
+    // Every shape asks for hit events (they feed the impact callback). With
+    // no callback the threshold is out of reach, so Box2D reports none.
+    def.hitEventThreshold   = FLT_MAX;
 
     b2WorldId id = b2CreateWorld(&def);
     if (!b2World_IsValid(id)) {
@@ -926,7 +929,7 @@ extern "C" int64_t b2w_createWorld(float gx, float gy, int32_t numThreads) {
 
     {
         std::lock_guard<std::mutex> lk(g_worldsMutex);
-        g_worlds[h] = {pool, nullptr, 0.0f, {}, {}};
+        g_worlds[h] = {pool, nullptr, {}, {}};
     }
     return h;
 }
@@ -1005,32 +1008,21 @@ extern "C" void b2w_step(int64_t h, float timeStep, int32_t subSteps) {
         it->second.lastContacts = b2World_GetContactEvents(wid);
         it->second.lastSensors  = b2World_GetSensorEvents(wid);
 
-        // High-velocity begin-touch events, for the impact callback.
+        // Box2D's hit events, for the impact callback: one for each contact
+        // that closed faster than the world's hit event threshold this step,
+        // with the speed it closed at.
         cb = it->second.impactCallback;
         if (cb != nullptr) {
             const b2ContactEvents& contacts = it->second.lastContacts;
-            const float threshold = it->second.impactThreshold;
-            for (int32_t i = 0; i < contacts.beginCount; ++i) {
-                const b2ContactBeginTouchEvent& ev = contacts.beginEvents[i];
-                if (!b2Shape_IsValid(ev.shapeIdA) || !b2Shape_IsValid(ev.shapeIdB)) {
-                    continue;
-                }
-                b2BodyId bodyA = b2Shape_GetBody(ev.shapeIdA);
-                b2BodyId bodyB = b2Shape_GetBody(ev.shapeIdB);
-                b2Vec2   vA    = b2Body_GetLinearVelocity(bodyA);
-                b2Vec2   vB    = b2Body_GetLinearVelocity(bodyB);
-                float dvx   = vA.x - vB.x;
-                float dvy   = vA.y - vB.y;
-                float speed = std::sqrt(dvx * dvx + dvy * dvy);
-                if (speed >= threshold) {
-                    impacts.push_back({packBodyId(bodyA, wid.generation),
-                                       packBodyId(bodyB, wid.generation),
-                                       speed});
-                }
+            for (int32_t i = 0; i < contacts.hitCount; ++i) {
+                const b2ContactHitEvent& ev = contacts.hitEvents[i];
+                const int64_t a = bodyOfShape(ev.shapeIdA, wid.generation);
+                const int64_t b = bodyOfShape(ev.shapeIdB, wid.generation);
+                if (a != 0 && b != 0) impacts.push_back({a, b, ev.approachSpeed});
             }
         }
     }
-    // Called with no lock held.
+    // Called with no lock held, on this thread, before b2w_step returns.
     for (const Impact& i : impacts) cb(i.a, i.b, i.speed);
 }
 
@@ -1059,23 +1051,31 @@ extern "C" void b2w_destroyBody(int64_t bh) {
 
 // ── Shapes ────────────────────────────────────────────────────────────────────
 
+/// What every shape of body bh starts from.
+static b2ShapeDef _shapeDef(int64_t bh, float density, float friction,
+                            float restitution) {
+    b2ShapeDef sd = b2DefaultShapeDef();
+    // b2DefaultShapeDef leaves contact events off, so Box2D would report no
+    // begin/end touch events for the shape, and nothing built on them (a
+    // character's "on the ground" check, say) would ever see a contact.
+    sd.enableContactEvents  = true;
+    // For the impact callback. They cost next to nothing without one: the
+    // world's hit event threshold is out of reach until then.
+    sd.enableHitEvents      = true;
+    sd.density              = density;
+    sd.material.friction    = friction;
+    sd.material.restitution = restitution;
+    sd.isSensor             = _isSensorBody(bh);
+    // A sensor sees only shapes that enable sensor events, and a sensor
+    // shape reports nothing unless it enables them itself.
+    sd.enableSensorEvents   = true;
+    return sd;
+}
+
 extern "C" void b2w_addCircleShape(int64_t bh, float cx, float cy,
                                     float radius, float density,
                                     float friction, float restitution) {
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true; // must be true on BOTH sides for sensor events to fire
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     b2Circle circle = {{cx, cy}, radius};
     b2BodyId body;
@@ -1086,20 +1086,7 @@ extern "C" void b2w_addCircleShape(int64_t bh, float cx, float cy,
 extern "C" void b2w_addBoxShape(int64_t bh, float halfW, float halfH,
                                  float density, float friction,
                                  float restitution) {
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true;
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     b2Polygon box = b2MakeBox(halfW, halfH);
     b2BodyId body;
@@ -1142,20 +1129,7 @@ extern "C" void b2w_addPolygonShape(int64_t bh,
                                      float restitution) {
     b2BodyId body;
     if (!liveBody(bh, &body)) return;
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true;
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     _addConvexPolygon(body, sd, verts, count, 0.0f);
 }
@@ -1167,20 +1141,7 @@ extern "C" void b2w_addRoundedPolygonShape(int64_t bh,
                                             float restitution) {
     b2BodyId body;
     if (!liveBody(bh, &body)) return;
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true;
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     _addConvexPolygon(body, sd, verts, count, cornerRadius);
 }
@@ -1190,20 +1151,7 @@ extern "C" void b2w_addCapsuleShape(int64_t bh,
                                      float radius,
                                      float density, float friction,
                                      float restitution) {
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true;
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     b2Capsule capsule;
     capsule.center1 = {cx1, cy1};
@@ -1218,20 +1166,7 @@ extern "C" void b2w_addSegmentShape(int64_t bh,
                                      float x1, float y1, float x2, float y2,
                                      float density, float friction,
                                      float restitution) {
-    bool sensor = _isSensorBody(bh);
-    b2ShapeDef sd        = b2DefaultShapeDef();
-    // b2DefaultShapeDef zero-initialises, so enableContactEvents is FALSE and
-    // Box2D reports no begin/end touch events at all for the shape. That made
-    // PhysicsEngine.pollContactBeginEvents permanently silent on this backend
-    // while the pure-Dart one generated events normally — so anything built on
-    // contacts (PhysicsBodyComponent.isGrounded, and therefore every jump)
-    // worked on web and silently did nothing on desktop and mobile.
-    sd.enableContactEvents = true;
-    sd.density           = density;
-    sd.material.friction    = friction;
-    sd.material.restitution = restitution;
-    sd.isSensor             = sensor;
-    sd.enableSensorEvents   = true;
+    const b2ShapeDef sd = _shapeDef(bh, density, friction, restitution);
 
     b2Segment seg;
     seg.point1 = {x1, y1};
@@ -1287,8 +1222,9 @@ extern "C" void b2w_applyForce(int64_t bh, float fx, float fy) {
 extern "C" void b2w_applyLinearImpulse(int64_t bh, float ix, float iy) {
     b2BodyId id;
     if (!liveBody(bh, &id)) return;
-    b2Vec2 point = b2Body_GetPosition(id);
-    b2Body_ApplyLinearImpulse(id, {ix, iy}, point, true);
+    // At the centre of mass, not the body's origin: an impulse at the origin
+    // of a body whose shapes sit off it would spin it as well.
+    b2Body_ApplyLinearImpulseToCenter(id, {ix, iy}, true);
 }
 
 extern "C" void b2w_applyTorque(int64_t bh, float torque) {
@@ -1436,14 +1372,10 @@ extern "C" void b2w_getSensorEndEvent(int64_t wh, int32_t index,
 extern "C" void b2w_setBodySensor(int64_t bh, int32_t isSensor) {
     b2BodyId bodyId;
     if (!liveBody(bh, &bodyId)) return;
-    { std::lock_guard<std::mutex> lk(g_sensorMutex); g_sensorFlags[bh] = (isSensor != 0); }
-    // Update sensor events on shapes already attached to this body.
-    // enableSensorEvents stays true on all shapes; only isSensor changes here.
-    const std::vector<b2ShapeId> shapes = shapesOf(bodyId);
-    const int count = (int)shapes.size();
-    for (int i = 0; i < count; ++i) {
-        b2Shape_EnableSensorEvents(shapes[i], true);
-    }
+    // Read by the shape adders. Shapes already on the body keep what they
+    // are: Box2D cannot turn a shape into a sensor, or back.
+    std::lock_guard<std::mutex> lk(g_sensorMutex);
+    g_sensorFlags[bh] = (isSensor != 0);
 }
 
 extern "C" void b2w_setBodyFilter(int64_t bh,
@@ -1606,19 +1538,14 @@ extern "C" int64_t b2w_createDistanceJoint(int64_t wh,
     def.base.localFrameA.q = b2Rot_identity;
     def.base.localFrameB.p = {0.0f, 0.0f};
     def.base.localFrameB.q = b2Rot_identity;
-    def.minLength          = minLen;
-    def.maxLength          = maxLen;
+    def.minLength          = std::min(minLen, maxLen);
+    def.maxLength          = std::max(minLen, maxLen);
     def.length             = (minLen + maxLen) * 0.5f;
+    // No spring yet: free between the lengths, rigid at them (see
+    // _applyDistanceMode).
+    def.enableLimit        = true;
+    def.enableSpring       = def.minLength < def.maxLength;
     return packJointId(b2CreateDistanceJoint(wid, &def), wid.generation);
-}
-
-extern "C" int64_t b2w_createMouseJoint(int64_t wh,
-                                          int64_t bB,
-                                          float targetX, float targetY) {
-    // Mouse joint is not available in this Box2D version.
-    // The Dart pure-fallback MouseJoint handles this constraint instead.
-    (void)wh; (void)bB; (void)targetX; (void)targetY;
-    return 0;
 }
 
 extern "C" int64_t b2w_createWeldJoint(int64_t wh,
@@ -1727,23 +1654,42 @@ extern "C" void b2w_setPrismaticMotor(int64_t jh,
     if (enable != 0) _wakeJointBodies(id);
 }
 
+/// Switches a distance joint's limit and spring to match its range and its
+/// spring's frequency:
+///  - no spring (0 Hz): free between the two lengths, rigid at them; equal
+///    lengths make a rigid rod;
+///  - a spring: it pulls toward the rest length (the middle of the range),
+///    and an open range still stops it at its ends; with equal lengths there
+///    is only the spring.
+/// Box2D solves a distance joint as a spring when the spring is on and the
+/// range is open (or the limit off), and rigidly otherwise, so a joint with
+/// an open range keeps its spring on even at 0 Hz: it then pulls with no
+/// force, and the limit alone holds the range.
+static void _applyDistanceMode(b2JointId id) {
+    const bool ranged =
+        b2DistanceJoint_GetMinLength(id) < b2DistanceJoint_GetMaxLength(id);
+    const bool spring = b2DistanceJoint_GetSpringHertz(id) > 0.0f;
+    b2DistanceJoint_EnableLimit(id, ranged || !spring);
+    b2DistanceJoint_EnableSpring(id, ranged || spring);
+}
+
 extern "C" void b2w_setDistanceLimits(int64_t jh, float minLen, float maxLen) {
     b2JointId id;
     if (!liveJoint(jh, &id)) return;
     b2DistanceJoint_SetLengthRange(id, minLen, maxLen);
+    b2DistanceJoint_SetLength(id, (minLen + maxLen) * 0.5f);
+    _applyDistanceMode(id);
+    _wakeJointBodies(id);
 }
 
 extern "C" void b2w_setDistanceSpring(int64_t jh,
-                                       float stiffness, float damping) {
+                                       float hertz, float dampingRatio) {
     b2JointId id;
     if (!liveJoint(jh, &id)) return;
-    b2DistanceJoint_SetSpringHertz(id, stiffness);
-    b2DistanceJoint_SetSpringDampingRatio(id, damping);
-}
-
-extern "C" void b2w_setMouseJointTarget(int64_t jh, float x, float y) {
-    // Mouse joint not available in this Box2D version — no-op.
-    (void)jh; (void)x; (void)y;
+    b2DistanceJoint_SetSpringHertz(id, hertz > 0.0f ? hertz : 0.0f);
+    b2DistanceJoint_SetSpringDampingRatio(id, dampingRatio);
+    _applyDistanceMode(id);
+    _wakeJointBodies(id);
 }
 
 extern "C" void b2w_setWheelSpring(int64_t jh,
@@ -1788,9 +1734,13 @@ extern "C" float b2w_getJointReactionTorque(int64_t jh) {
 extern "C" void b2w_setImpactCallback(int64_t wh,
                                        ImpactCallbackFn callback,
                                        float speedThreshold) {
+    b2WorldId wid;
+    if (!liveWorld(wh, &wid)) return;
     std::lock_guard<std::mutex> lk(g_worldsMutex);
     auto it = g_worlds.find(wh);
     if (it == g_worlds.end()) return;
-    it->second.impactCallback  = callback;
-    it->second.impactThreshold = speedThreshold;
+    it->second.impactCallback = callback;
+    // Out of reach with no callback, so Box2D gathers no hit events.
+    b2World_SetHitEventThreshold(
+        wid, callback != nullptr ? std::max(speedThreshold, 0.0f) : FLT_MAX);
 }

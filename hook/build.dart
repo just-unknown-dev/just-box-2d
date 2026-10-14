@@ -45,8 +45,17 @@ void main(List<String> args) async {
     ];
     final flags = [
       '-O2',
-      '-DB2_ENABLE_MULTITHREADING',
+      // Only the C layer's functions (B2W_EXPORT) leave the library; Box2D's
+      // own stay inside, so they never clash with another library's copy.
+      // (MSVC exports only what is marked dllexport already.)
+      if (targetOS != OS.windows) '-fvisibility=hidden',
       if (targetOS == OS.android) '-Wno-unused-command-line-argument',
+    ];
+    // The same for the C++ runtime Android links in statically, and for
+    // anything else linked from an archive (GNU-style linkers only).
+    final linkFlags = [
+      if (targetOS == OS.android || targetOS == OS.linux)
+        '-Wl,--exclude-libs,ALL',
     ];
 
     // Stage 1's own output is thrown away (the static library is only linked
@@ -81,7 +90,7 @@ void main(List<String> args) async {
         // atan2f").
         if (targetOS == OS.android || targetOS == OS.linux) 'm',
       ],
-      flags: flags,
+      flags: [...flags, ...linkFlags],
       std: 'c++17',
       language: Language.cpp,
       cppLinkStdLib: targetOS == OS.android ? 'c++_static' : null,

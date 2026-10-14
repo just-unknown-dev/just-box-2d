@@ -25,7 +25,7 @@ void main() {
 ```
 
 - `package:just_box_2d/just_box_2d.dart` — `Box2D`: whether the library is in this build, and its version. Safe to import on the web, where it says Box2D cannot run.
-- `package:just_box_2d/ffi.dart` — native platforms only: `Box2D` and the generated bindings (`b2w_*`, with `addresses` of the finalizers).
+- `package:just_box_2d/ffi.dart` — native platforms only: `Box2D` and the generated bindings (`b2w_*`, with `addresses` of the finalizers). The caller allocates out-parameters and buffers (`calloc` from `package:ffi`, say). Every function's rules — units, threads, handles — are at the top of [`src/b2w/box2d_wrapper.h`](src/b2w/box2d_wrapper.h), and each one's doc comment is in the bindings.
 
 The whole program, a ball dropped on a floor, is in [`example/example.dart`](example/example.dart). For a game engine's 2D physics on top of it, with a pure-Dart engine for the web, see just_physics_engine's `Box2DPhysicsEngine`.
 
@@ -48,7 +48,7 @@ Then `Box2D.isAvailable` is false, and `Box2D.unavailableReason` says why.
 |---|---|
 | Windows x64 | Built and tested here (MSVC); about 0.5 MB. |
 | Android arm64-v8a, armeabi-v7a, x86_64 | Built by the hook (NDK); run on an x86_64 emulator. The C++ runtime is linked in (no `libc++_shared.so` to ship). |
-| Linux | The C layer and Box2D build with GCC 12 and pass a smoke test of the C layer; not run in a Flutter app. |
+| Linux x64 | Built by the hook with clang (install `clang`; Flutter's Linux toolchain needs it anyway) and tested with clang 19 on Debian; not run in a Flutter app. The C sources also build with GCC 12. |
 | macOS, iOS | Should build (clang); untested. |
 | Web (JavaScript and WebAssembly) | `package:just_box_2d/just_box_2d.dart` compiles, and `Box2D.isAvailable` is false (no `dart:ffi`). Don't import `package:just_box_2d/ffi.dart` in web code. |
 
@@ -56,10 +56,10 @@ Then `Box2D.isAvailable` is false, and `Box2D.unavailableReason` says why.
 
 There is no CMake step. `hook/build.dart` compiles everything unless an app says `build: false`:
 
-1. **`box2d_core`** (static, never bundled): Box2D's C sources in `src/box2d/src/`, C17, with `B2_ENABLE_MULTITHREADING`.
+1. **`box2d_core`** (static, never bundled): Box2D's C sources in `src/box2d/src/`, C17.
 2. **`just_box_2d`** (the bundled library, asset id `package:just_box_2d/just_box_2d`): the C layer, `src/b2w/box2d_wrapper.cpp` and `thread_pool.cpp`, C++17, with `box2d_core` linked in.
 
-Both stages build at `-O2`; Android and Linux link `libm`, and Android links `c++_static`. The bindings find the library by its asset id on every platform, never by a file name.
+Both stages build at `-O2`; Android and Linux link `libm`, and Android links `c++_static`. Only the C layer's `b2w_*` functions leave the library: Box2D's own symbols, and on Android and Linux the C++ runtime linked in, stay hidden, so they never clash with another copy in the app. The bindings find the library by its asset id on every platform, never by a file name.
 
 ## Our C layer (`src/b2w/box2d_wrapper.h`)
 
@@ -67,14 +67,14 @@ Both stages build at `-O2`; Android and Linux link `libm`, and Android links `c+
 - **Handles**: a world handle is Box2D's id (slot and generation); a body, chain or joint handle packs Box2D's id with its world's generation, so one from a world that has gone never names something in a newer world in the same slot. Every function checks its handles before Box2D sees them (Box2D checks nothing in a release build) and does nothing with a dead one.
 - **Teardown in any order.** `b2w_finalizer_world` and `b2w_finalizer_body` are for `NativeFinalizer`. A finalizer can run on any thread, even mid-step, so it only queues the destroy; the next create, destroy or step from Dart performs it.
 - **Batch reads**: every body's position, angle, velocity, spin and awake flag in one call (`b2w_bulkExtractTransforms`), and the bodies that moved.
-- **Events** after a step: contact begin and end (with the normal), sensor begin and end, and an impact callback for fast collisions (a `NativeCallable.listener`, called with no lock held). An event whose shape has gone names no body (0).
+- **Events** after a step: contact begin and end (with the normal), sensor begin and end, and an impact callback from Box2D's hit events: every contact that closed faster than a threshold, with its speed, called on the stepping thread before `b2w_step` returns (receive it with a `NativeCallable.listener`). An event whose shape has gone names no body (0).
 - **Queries** into caller buffers: closest or all ray hits, AABB overlaps.
 - **Character movers**: `b2w_moverCollide` (the surfaces a capsule or box touches, as planes) and `b2w_moverCast` (how far it can move), on Box2D's GJK and shape cast, passing over sensors, one ignored body, and one-way platforms it is not standing on or is partway through.
 - **One-way platforms**: a pre-solve filter by side (`b2w_setBodyOneWay`), screen convention (+Y down: "from above" is the smaller-y side).
 - **Shapes**: circles (off-centre too), boxes, convex polygons of any vertex count (more than 8 are cut into a fan of convex pieces), rounded polygons, capsules, segments and chains (at least 4 points; an open chain's first and last are ghosts).
-- **Joints**: revolute, prismatic, distance, weld and wheel, with limits, motors and springs.
+- **Joints**: revolute, prismatic, distance (a rope free within a range, a rigid rod, or a spring), weld and wheel, with limits, motors and springs. Box2D v3 has no mouse joint.
 
-Use the library from one isolate per process: its worlds belong to the whole process. On a 32-bit platform a finalizer token keeps only a body handle's low 32 bits, so a body's finalizer does nothing there; the body goes with its world.
+Use the library from one isolate per process, one thread at a time: its worlds, and the length units the first one sets, belong to the whole process. On a 32-bit platform a finalizer token keeps only a body handle's low 32 bits, so a body's finalizer does nothing there; the body goes with its world.
 
 ## Updating Box2D
 
