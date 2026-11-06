@@ -1432,6 +1432,20 @@ extern "C" void b2w_setBodyFixedRotation(int64_t bh, int32_t fixed) {
     b2Body_SetMotionLocks(id, locks);
 }
 
+extern "C" void b2w_setBodyEnabled(int64_t bh, int32_t enabled) {
+    // Box2D moves a disabled body, its shapes and its joints into a solver
+    // set of their own: out of the broad phase (so no contact, query or
+    // sensor finds it), out of its island, its contacts destroyed with end
+    // events. Both calls return at once for a body already in that state.
+    b2BodyId id;
+    if (!liveBody(bh, &id)) return;
+    if (enabled != 0) {
+        b2Body_Enable(id);
+    } else {
+        b2Body_Disable(id);
+    }
+}
+
 extern "C" void b2w_setBodyMass(int64_t bh, float mass) {
     b2BodyId id;
     if (!liveBody(bh, &id)) return;
@@ -1472,72 +1486,87 @@ extern "C" void b2w_getBodyMoveEvent(int64_t wh, int32_t index,
     *outFellAsleep = e.fellAsleep ? 1 : 0;
 }
 
-// ── Joint creation ────────────────────────────────────────────────────────────
+/// ── Joint creation ────────────────────────────────────────────────────────────
+
+/// The world and the two bodies of a joint about to be made, when all are
+/// alive and the bodies may be jointed.
+static bool _jointBodies(int64_t wh, int64_t bA, int64_t bB, b2WorldId* wid,
+                         b2BodyId* bodyA, b2BodyId* bodyB) {
+    return liveWorld(wh, wid) && liveBody(bA, bodyA) && liveBody(bB, bodyB) &&
+           jointable(*wid, *bodyA, *bodyB);
+}
+
+/// Fills a joint's bodies, frames and collideConnected. Each body's frame is
+/// the same world frame — at anchorA / anchorB, turned by rot — in that
+/// body's own space, so the joint starts out satisfied: the bodies keep the
+/// angle between them that they have now. (Frames left unturned instead
+/// would pull bodies turned apart back into line, swinging a welded or
+/// sliding body round the anchor.)
+static void _jointFrames(b2JointDef* def, b2BodyId bodyA, b2BodyId bodyB,
+                         b2Vec2 anchorA, b2Vec2 anchorB, b2Rot rot,
+                         int32_t collideConnected) {
+    def->bodyIdA          = bodyA;
+    def->bodyIdB          = bodyB;
+    def->localFrameA.p    = b2Body_GetLocalPoint(bodyA, anchorA);
+    def->localFrameA.q    = b2InvMulRot(b2Body_GetRotation(bodyA), rot);
+    def->localFrameB.p    = b2Body_GetLocalPoint(bodyB, anchorB);
+    def->localFrameB.q    = b2InvMulRot(b2Body_GetRotation(bodyB), rot);
+    def->collideConnected = collideConnected != 0;
+}
+
+/// The rotation whose x axis is (axisX, axisY); unturned for a zero axis.
+static b2Rot _axisRot(float axisX, float axisY) {
+    return b2MakeRot(atan2f(axisY, axisX));
+}
 
 extern "C" int64_t b2w_createRevoluteJoint(int64_t wh,
                                              int64_t bA, int64_t bB,
-                                             float anchorX, float anchorY) {
+                                             float anchorX, float anchorY,
+                                             int32_t collideConnected) {
     b2WorldId wid;
     b2BodyId  bodyA, bodyB;
-    if (!liveWorld(wh, &wid) || !liveBody(bA, &bodyA) || !liveBody(bB, &bodyB) ||
-        !jointable(wid, bodyA, bodyB)) {
-        return 0;
-    }
-    b2Vec2    world = {anchorX, anchorY};
+    if (!_jointBodies(wh, bA, bB, &wid, &bodyA, &bodyB)) return 0;
+    const b2Vec2 anchor = {anchorX, anchorY};
 
+    // Frames turned as bodyA is: the hinge's angle starts at 0, and its
+    // limits are measured from the angle the bodies have now.
     b2RevoluteJointDef def = b2DefaultRevoluteJointDef();
-    def.base.bodyIdA       = bodyA;
-    def.base.bodyIdB       = bodyB;
-    def.base.localFrameA.p = b2Body_GetLocalPoint(bodyA, world);
-    def.base.localFrameA.q = b2Rot_identity;
-    def.base.localFrameB.p = b2Body_GetLocalPoint(bodyB, world);
-    def.base.localFrameB.q = b2Rot_identity;
+    _jointFrames(&def.base, bodyA, bodyB, anchor, anchor,
+                 b2Body_GetRotation(bodyA), collideConnected);
     return packJointId(b2CreateRevoluteJoint(wid, &def), wid.generation);
 }
 
 extern "C" int64_t b2w_createPrismaticJoint(int64_t wh,
                                               int64_t bA, int64_t bB,
                                               float anchorX, float anchorY,
-                                              float axisX,   float axisY) {
+                                              float axisX,   float axisY,
+                                              int32_t collideConnected) {
     b2WorldId wid;
     b2BodyId  bodyA, bodyB;
-    if (!liveWorld(wh, &wid) || !liveBody(bA, &bodyA) || !liveBody(bB, &bodyB) ||
-        !jointable(wid, bodyA, bodyB)) {
-        return 0;
-    }
-    b2Vec2    world = {anchorX, anchorY};
-    b2Vec2    axis  = {axisX, axisY};
+    if (!_jointBodies(wh, bA, bB, &wid, &bodyA, &bodyB)) return 0;
+    const b2Vec2 anchor = {anchorX, anchorY};
 
-    b2Vec2 localAxis = b2Body_GetLocalVector(bodyA, axis);
-    float  angle     = atan2f(localAxis.y, localAxis.x);
-
-    b2PrismaticJointDef def  = b2DefaultPrismaticJointDef();
-    def.base.bodyIdA         = bodyA;
-    def.base.bodyIdB         = bodyB;
-    def.base.localFrameA.p   = b2Body_GetLocalPoint(bodyA, world);
-    def.base.localFrameA.q   = b2MakeRot(angle);
-    def.base.localFrameB.p   = b2Body_GetLocalPoint(bodyB, world);
-    def.base.localFrameB.q   = b2Rot_identity;
+    // The frames' x axis is the slider's axis.
+    b2PrismaticJointDef def = b2DefaultPrismaticJointDef();
+    _jointFrames(&def.base, bodyA, bodyB, anchor, anchor,
+                 _axisRot(axisX, axisY), collideConnected);
     return packJointId(b2CreatePrismaticJoint(wid, &def), wid.generation);
 }
 
 extern "C" int64_t b2w_createDistanceJoint(int64_t wh,
                                              int64_t bA, int64_t bB,
-                                             float minLen, float maxLen) {
+                                             float anchorAX, float anchorAY,
+                                             float anchorBX, float anchorBY,
+                                             float minLen, float maxLen,
+                                             int32_t collideConnected) {
     b2WorldId wid;
     b2BodyId  bodyA, bodyB;
-    if (!liveWorld(wh, &wid) || !liveBody(bA, &bodyA) || !liveBody(bB, &bodyB) ||
-        !jointable(wid, bodyA, bodyB)) {
-        return 0;
-    }
+    if (!_jointBodies(wh, bA, bB, &wid, &bodyA, &bodyB)) return 0;
 
     b2DistanceJointDef def = b2DefaultDistanceJointDef();
-    def.base.bodyIdA       = bodyA;
-    def.base.bodyIdB       = bodyB;
-    def.base.localFrameA.p = {0.0f, 0.0f};
-    def.base.localFrameA.q = b2Rot_identity;
-    def.base.localFrameB.p = {0.0f, 0.0f};
-    def.base.localFrameB.q = b2Rot_identity;
+    _jointFrames(&def.base, bodyA, bodyB, {anchorAX, anchorAY},
+                 {anchorBX, anchorBY}, b2Body_GetRotation(bodyA),
+                 collideConnected);
     def.minLength          = std::min(minLen, maxLen);
     def.maxLength          = std::max(minLen, maxLen);
     def.length             = (minLen + maxLen) * 0.5f;
@@ -1550,48 +1579,33 @@ extern "C" int64_t b2w_createDistanceJoint(int64_t wh,
 
 extern "C" int64_t b2w_createWeldJoint(int64_t wh,
                                          int64_t bA, int64_t bB,
-                                         float anchorX, float anchorY) {
+                                         float anchorX, float anchorY,
+                                         int32_t collideConnected) {
     b2WorldId wid;
     b2BodyId  bodyA, bodyB;
-    if (!liveWorld(wh, &wid) || !liveBody(bA, &bodyA) || !liveBody(bB, &bodyB) ||
-        !jointable(wid, bodyA, bodyB)) {
-        return 0;
-    }
-    b2Vec2    world = {anchorX, anchorY};
+    if (!_jointBodies(wh, bA, bB, &wid, &bodyA, &bodyB)) return 0;
+    const b2Vec2 anchor = {anchorX, anchorY};
 
-    b2WeldJointDef def     = b2DefaultWeldJointDef();
-    def.base.bodyIdA       = bodyA;
-    def.base.bodyIdB       = bodyB;
-    def.base.localFrameA.p = b2Body_GetLocalPoint(bodyA, world);
-    def.base.localFrameA.q = b2Rot_identity;
-    def.base.localFrameB.p = b2Body_GetLocalPoint(bodyB, world);
-    def.base.localFrameB.q = b2Rot_identity;
+    b2WeldJointDef def = b2DefaultWeldJointDef();
+    _jointFrames(&def.base, bodyA, bodyB, anchor, anchor,
+                 b2Body_GetRotation(bodyA), collideConnected);
     return packJointId(b2CreateWeldJoint(wid, &def), wid.generation);
 }
 
 extern "C" int64_t b2w_createWheelJoint(int64_t wh,
                                           int64_t bA, int64_t bB,
                                           float anchorX, float anchorY,
-                                          float axisX,   float axisY) {
+                                          float axisX,   float axisY,
+                                          int32_t collideConnected) {
     b2WorldId wid;
     b2BodyId  bodyA, bodyB;
-    if (!liveWorld(wh, &wid) || !liveBody(bA, &bodyA) || !liveBody(bB, &bodyB) ||
-        !jointable(wid, bodyA, bodyB)) {
-        return 0;
-    }
-    b2Vec2    world = {anchorX, anchorY};
-    b2Vec2    axis  = {axisX, axisY};
+    if (!_jointBodies(wh, bA, bB, &wid, &bodyA, &bodyB)) return 0;
+    const b2Vec2 anchor = {anchorX, anchorY};
 
-    b2Vec2 localAxis = b2Body_GetLocalVector(bodyA, axis);
-    float  angle     = atan2f(localAxis.y, localAxis.x);
-
-    b2WheelJointDef def    = b2DefaultWheelJointDef();
-    def.base.bodyIdA       = bodyA;
-    def.base.bodyIdB       = bodyB;
-    def.base.localFrameA.p = b2Body_GetLocalPoint(bodyA, world);
-    def.base.localFrameA.q = b2MakeRot(angle);
-    def.base.localFrameB.p = b2Body_GetLocalPoint(bodyB, world);
-    def.base.localFrameB.q = b2Rot_identity;
+    // The frames' x axis is the suspension's axis.
+    b2WheelJointDef def = b2DefaultWheelJointDef();
+    _jointFrames(&def.base, bodyA, bodyB, anchor, anchor,
+                 _axisRot(axisX, axisY), collideConnected);
     def.hertz              = 4.0f;
     def.dampingRatio       = 0.7f;
     return packJointId(b2CreateWheelJoint(wid, &def), wid.generation);
@@ -1693,11 +1707,12 @@ extern "C" void b2w_setDistanceSpring(int64_t jh,
 }
 
 extern "C" void b2w_setWheelSpring(int64_t jh,
-                                    float stiffness, float damping) {
+                                    float hertz, float dampingRatio) {
     b2JointId id;
     if (!liveJoint(jh, &id)) return;
-    b2WheelJoint_SetSpringHertz(id, stiffness);
-    b2WheelJoint_SetSpringDampingRatio(id, damping);
+    b2WheelJoint_SetSpringHertz(id, hertz > 0.0f ? hertz : 0.0f);
+    b2WheelJoint_SetSpringDampingRatio(id, dampingRatio);
+    _wakeJointBodies(id);
 }
 
 extern "C" void b2w_setWheelMotor(int64_t jh,

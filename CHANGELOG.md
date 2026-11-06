@@ -1,3 +1,21 @@
+## 0.2.0
+
+Joints that start out satisfied and take what just_physics_engine 2.0.0 saves, and a way to switch a body off.
+
+### Breaking
+
+* `b2w_createDistanceJoint(world, bodyA, bodyB, anchorAX, anchorAY, anchorBX, anchorBY, minLen, maxLen, collideConnected)`: a world anchor on each body, where it was the two bodies' origins (was `(world, bodyA, bodyB, minLen, maxLen)`).
+* Every `b2w_create*Joint` takes `int32_t collideConnected` last: non-zero lets the two bodies collide with each other; 0, Box2D's default and what 0.1.0 always did, keeps them apart.
+
+### Added
+
+* `b2w_setBodyEnabled(body, enabled)`, over `b2Body_Disable` / `b2Body_Enable`: a body switched off does not move, ends its contacts (with end events), leaves the broad phase (no query, mover or sensor finds it) and its joints hold nothing; it keeps its place, shapes and settings, and comes back at rest.
+
+### Fixed
+
+* Joint frames keep the angle between the bodies they are made at. 0.1.0 left both frames unturned, so a weld or slider made between bodies turned apart pulled them into line (swinging the second body round the anchor: a slider's car left its rail), and a hinge's limits counted from the bodies' absolute angles instead of from the angle it was made at.
+* `b2w_setWheelSpring` clamps a negative frequency to 0 and wakes the joint's bodies, as `b2w_setDistanceSpring` does.
+
 ## 0.1.0
 
 First release: Box2D for Dart, moved out of just_physics_engine 1.4.0 so other code can use it and the physics engine is plain Dart.

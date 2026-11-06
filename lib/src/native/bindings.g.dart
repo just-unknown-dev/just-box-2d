@@ -388,6 +388,17 @@ external void b2w_setBodySleepEnabled(int bodyHandle, int enabled);
 @ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
 external void b2w_setBodyFixedRotation(int bodyHandle, int fixed);
 
+/// Take the body out of the simulation (enabled == 0) or put it back in
+/// (enabled != 0). Out of it, the body does not move, touches nothing (its
+/// contacts end, with end events, and the bodies it touched wake), is found
+/// by no query or mover, leaves every sensor it was in, and its joints hold
+/// nothing. It keeps its place, shapes and settings, but not its velocity:
+/// it comes back at rest, awake. Both ways are expensive (its shapes leave
+/// and rejoin the broad phase): fine for a body switched off, not for every
+/// step. A body already in that state is left alone.
+@ffi.Native<ffi.Void Function(ffi.Int64, ffi.Int32)>()
+external void b2w_setBodyEnabled(int bodyHandle, int enabled);
+
 /// Give the body this mass instead of the one its shapes' density adds up
 /// to. The centre of mass stays where the shapes put it, and the rotational
 /// inertia scales with the mass, so the body turns as before. Call it after
@@ -434,7 +445,14 @@ external void b2w_getBodyMoveEvent(
 
 /// A hinge: the bodies turn freely about the anchor they share.
 @ffi.Native<
-  ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
+  ffi.Int64 Function(
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Float,
+    ffi.Float,
+    ffi.Int32,
+  )
 >()
 external int b2w_createRevoluteJoint(
   int worldHandle,
@@ -442,6 +460,7 @@ external int b2w_createRevoluteJoint(
   int bodyB,
   double anchorX,
   double anchorY,
+  int collideConnected,
 );
 
 /// A slider: bodyB moves along the axis through the anchor, and the two do
@@ -455,6 +474,7 @@ external int b2w_createRevoluteJoint(
     ffi.Float,
     ffi.Float,
     ffi.Float,
+    ffi.Int32,
   )
 >()
 external int b2w_createPrismaticJoint(
@@ -465,25 +485,51 @@ external int b2w_createPrismaticJoint(
   double anchorY,
   double axisX,
   double axisY,
+  int collideConnected,
 );
 
-/// A rope or rod between the two bodies' origins: their distance stays
-/// within [minLen, maxLen], free in between and rigid at the ends; equal
-/// lengths make a rigid rod. b2w_setDistanceSpring makes it springy.
+/// A rope or rod from (anchorAX, anchorAY) on bodyA to (anchorBX, anchorBY)
+/// on bodyB: the distance between the two points, which turn with their
+/// bodies, stays within [minLen, maxLen], free in between and rigid at the
+/// ends; equal lengths make a rigid rod. b2w_setDistanceSpring makes it
+/// springy.
 @ffi.Native<
-  ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
+  ffi.Int64 Function(
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Float,
+    ffi.Float,
+    ffi.Float,
+    ffi.Float,
+    ffi.Float,
+    ffi.Float,
+    ffi.Int32,
+  )
 >()
 external int b2w_createDistanceJoint(
   int worldHandle,
   int bodyA,
   int bodyB,
+  double anchorAX,
+  double anchorAY,
+  double anchorBX,
+  double anchorBY,
   double minLen,
   double maxLen,
+  int collideConnected,
 );
 
 /// Weld the bodies together at the anchor, as they are now.
 @ffi.Native<
-  ffi.Int64 Function(ffi.Int64, ffi.Int64, ffi.Int64, ffi.Float, ffi.Float)
+  ffi.Int64 Function(
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Int64,
+    ffi.Float,
+    ffi.Float,
+    ffi.Int32,
+  )
 >()
 external int b2w_createWeldJoint(
   int worldHandle,
@@ -491,6 +537,7 @@ external int b2w_createWeldJoint(
   int bodyB,
   double anchorX,
   double anchorY,
+  int collideConnected,
 );
 
 /// A wheel: bodyB turns freely about the anchor and moves on a spring along
@@ -504,6 +551,7 @@ external int b2w_createWeldJoint(
     ffi.Float,
     ffi.Float,
     ffi.Float,
+    ffi.Int32,
   )
 >()
 external int b2w_createWheelJoint(
@@ -514,6 +562,7 @@ external int b2w_createWheelJoint(
   double anchorY,
   double axisX,
   double axisY,
+  int collideConnected,
 );
 
 /// Destroy a joint.

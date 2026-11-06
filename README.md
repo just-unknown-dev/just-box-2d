@@ -5,7 +5,7 @@
 ```yaml
 # The app's pubspec.yaml
 dependencies:
-  just_box_2d: ^0.1.0
+  just_box_2d: ^0.2.0
 ```
 
 ```dart
@@ -72,7 +72,8 @@ Both stages build at `-O2`; Android and Linux link `libm`, and Android links `c+
 - **Character movers**: `b2w_moverCollide` (the surfaces a capsule or box touches, as planes) and `b2w_moverCast` (how far it can move), on Box2D's GJK and shape cast, passing over sensors, one ignored body, and one-way platforms it is not standing on or is partway through.
 - **One-way platforms**: a pre-solve filter by side (`b2w_setBodyOneWay`), screen convention (+Y down: "from above" is the smaller-y side).
 - **Shapes**: circles (off-centre too), boxes, convex polygons of any vertex count (more than 8 are cut into a fan of convex pieces), rounded polygons, capsules, segments and chains (at least 4 points; an open chain's first and last are ghosts).
-- **Joints**: revolute, prismatic, distance (a rope free within a range, a rigid rod, or a spring), weld and wheel, with limits, motors and springs. Box2D v3 has no mouse joint.
+- **Joints**: revolute, prismatic, distance (a rope free within a range, a rigid rod, or a spring, between an anchor on each body), weld and wheel, with limits, motors and springs. Each starts out satisfied: bodies turned apart stay turned apart, and a hinge's angle starts at 0. `collideConnected` says whether the two bodies collide. Box2D v3 has no mouse joint.
+- **Switching a body off**: `b2w_setBodyEnabled` takes a body out of the simulation (no motion, contacts, queries, sensors or joints) and puts it back.
 
 Use the library from one isolate per process, one thread at a time: its worlds, and the length units the first one sets, belong to the whole process. On a 32-bit platform a finalizer token keeps only a body handle's low 32 bits, so a body's finalizer does nothing there; the body goes with its world.
 

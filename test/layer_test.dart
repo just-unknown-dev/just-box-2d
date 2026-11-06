@@ -80,7 +80,10 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 0, 50);
-      expect(b2w_createDistanceJoint(world, anchor, ball, 20, 100), isNot(0));
+      expect(
+        b2w_createDistanceJoint(world, anchor, ball, 0, 0, 0, 50, 20, 100, 0),
+        isNot(0),
+      );
       _steps(world, 120);
       expect(_distance(anchor, ball), closeTo(100, 1.5));
     });
@@ -89,7 +92,7 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 50, 0); // a pendulum, level with its pivot
-      b2w_createDistanceJoint(world, anchor, ball, 50, 50);
+      b2w_createDistanceJoint(world, anchor, ball, 0, 0, 50, 0, 50, 50, 0);
       for (var i = 0; i < 120; i++) {
         _steps(world, 1);
         expect(_distance(anchor, ball), closeTo(50, 1), reason: 'step $i');
@@ -101,7 +104,18 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 0, 50);
-      final joint = b2w_createDistanceJoint(world, anchor, ball, 50, 50);
+      final joint = b2w_createDistanceJoint(
+        world,
+        anchor,
+        ball,
+        0,
+        0,
+        0,
+        50,
+        50,
+        50,
+        0,
+      );
       // 2 Hz: gravity stretches it by about g / (2π·2)² ≈ 6 units at rest.
       b2w_setDistanceSpring(joint, 2, 0.1);
       var longest = 0.0;
@@ -120,7 +134,18 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 0, 50);
-      final joint = b2w_createDistanceJoint(world, anchor, ball, 50, 50);
+      final joint = b2w_createDistanceJoint(
+        world,
+        anchor,
+        ball,
+        0,
+        0,
+        0,
+        50,
+        50,
+        50,
+        0,
+      );
       _steps(world, 60);
       expect(_distance(anchor, ball), closeTo(50, 1));
       b2w_setDistanceLimits(joint, 20, 100);
@@ -128,11 +153,38 @@ void main() {
       expect(_distance(anchor, ball), closeTo(100, 1.5));
     });
 
+    test('anchors off the centres: a ball hangs under the end of a beam', () {
+      final world = _world();
+      final beam = b2w_createStaticBody(world, 0, 0, 0);
+      b2w_addBoxShape(beam, 50, 5, 1, 0.6, 0);
+      final ball = _ball(world, 50, 40);
+      // From the beam's right end to the top of the ball.
+      expect(
+        b2w_createDistanceJoint(world, beam, ball, 50, 0, 50, 35, 35, 35, 0),
+        isNot(0),
+      );
+      _steps(world, 120);
+      final pose = _read(ball);
+      expect(pose.x, closeTo(50, 1), reason: 'under the end, not the centre');
+      expect(pose.y, closeTo(40, 1));
+    });
+
     test('the reaction force of a hanging rod carries the weight', () {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 0, 50);
-      final joint = b2w_createDistanceJoint(world, anchor, ball, 50, 50);
+      final joint = b2w_createDistanceJoint(
+        world,
+        anchor,
+        ball,
+        0,
+        0,
+        0,
+        50,
+        50,
+        50,
+        0,
+      );
       _steps(world, 120);
       final weight = math.pi * 5 * 5 * 981; // density 1, radius 5
       using((arena) {
@@ -151,7 +203,7 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final wheel = _ball(world, 0, 0, radius: 10);
-      final joint = b2w_createRevoluteJoint(world, anchor, wheel, 0, 0);
+      final joint = b2w_createRevoluteJoint(world, anchor, wheel, 0, 0, 0);
       b2w_setRevoluteMotor(joint, 3, 1e9, 1);
       _steps(world, 30);
       expect(_read(wheel).spin, closeTo(3, 0.01));
@@ -162,7 +214,16 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final slider = _ball(world, 0, 0);
-      final joint = b2w_createPrismaticJoint(world, anchor, slider, 0, 0, 1, 0);
+      final joint = b2w_createPrismaticJoint(
+        world,
+        anchor,
+        slider,
+        0,
+        0,
+        1,
+        0,
+        0,
+      );
       b2w_setPrismaticLimits(joint, -10, 10, 1);
       b2w_setLinearVelocity(slider, 500, 0);
       _steps(world, 60);
@@ -175,15 +236,87 @@ void main() {
       final world = _world();
       final anchor = b2w_createStaticBody(world, 0, 0, 0);
       final ball = _ball(world, 30, 0);
-      expect(b2w_createWeldJoint(world, anchor, ball, 0, 0), isNot(0));
+      expect(b2w_createWeldJoint(world, anchor, ball, 0, 0, 0), isNot(0));
       _steps(world, 60);
       expect(_read(ball).y, closeTo(0, 1));
+    });
+
+    test('a weld keeps bodies turned apart turned apart', () {
+      final world = _world();
+      final wall = b2w_createStaticBody(world, 0, 0, 0.5);
+      final box = b2w_createDynamicBody(world, 30, 0, 0);
+      b2w_addBoxShape(box, 5, 5, 1, 0.6, 0);
+      b2w_createWeldJoint(world, wall, box, 0, 0, 0);
+      _steps(world, 60);
+      final pose = _read(box);
+      // It sags a little under gravity; 0.1.0 turned it all the way to 0.5.
+      expect(pose.angle, closeTo(0, 0.05), reason: 'the angle it was made at');
+      expect(pose.x, closeTo(30, 1));
+      expect(pose.y, closeTo(0, 1));
+    });
+
+    test('a slider keeps its car at its own angle, on its rail', () {
+      final world = _world();
+      final rail = b2w_createStaticBody(world, 0, 0, 0.3);
+      final car = b2w_createDynamicBody(world, 0, 0, 0.4);
+      b2w_addBoxShape(car, 10, 5, 1, 0.6, 0);
+      // A level axis through a point 20 to the car's right.
+      b2w_createPrismaticJoint(world, rail, car, 20, 0, 1, 0, 0);
+      _steps(world, 30);
+      final pose = _read(car);
+      expect(pose.angle, closeTo(0.4, 0.01));
+      expect(pose.y, closeTo(0, 0.5), reason: 'held on its rail');
+    });
+
+    test("a hinge's limits count from the angle it was made at", () {
+      final world = b2w_createWorld(0, 0, 1);
+      addTearDown(() => b2w_destroyWorld(world));
+      final post = b2w_createStaticBody(world, 0, 0, 0);
+      final door = b2w_createDynamicBody(world, 0, 0, 1);
+      b2w_addBoxShape(door, 5, 30, 1, 0.6, 0);
+      final joint = b2w_createRevoluteJoint(world, post, door, 0, 0, 0);
+      b2w_setRevoluteLimits(joint, -0.1, 0.1, 1);
+      b2w_setAngularVelocity(door, 5);
+      _steps(world, 60);
+      expect(_read(door).angle, closeTo(1.1, 0.02));
+    });
+
+    test('collideConnected lets jointed bodies collide, and only then', () {
+      for (final collide in [0, 1]) {
+        final world = _world();
+        final floor = _floor(world);
+        final ball = _ball(world, 0, -5); // resting on the floor
+        // A loose rope, 400 long, from a point on the floor well to the side
+        // (so the ball never falls past it) to the ball's centre.
+        b2w_createDistanceJoint(
+          world,
+          floor,
+          ball,
+          200,
+          20,
+          0,
+          -5,
+          0,
+          400,
+          collide,
+        );
+        _steps(world, 60);
+        final y = _read(ball).y;
+        if (collide != 0) {
+          expect(y, closeTo(-5, 0.6), reason: 'on the floor');
+        } else {
+          expect(y, greaterThan(150), reason: 'through the floor');
+        }
+      }
     });
 
     test('a joint is not made between a body and itself', () {
       final world = _world();
       final ball = _ball(world, 0, 0);
-      expect(b2w_createDistanceJoint(world, ball, ball, 1, 1), 0);
+      expect(
+        b2w_createDistanceJoint(world, ball, ball, 0, 0, 0, 0, 1, 1, 0),
+        0,
+      );
     });
   });
 
@@ -624,6 +757,45 @@ void main() {
       b2w_setBodyType(mover, B2W_BODY_DYNAMIC);
       expect(b2w_getBodyType(mover), B2W_BODY_DYNAMIC);
       expect(b2w_getBodyType(0), B2W_BODY_STATIC, reason: 'no body');
+    });
+
+    test('a disabled body is out of the simulation until enabled', () {
+      final world = _world();
+      final floor = _floor(world);
+      final ball = _ball(world, 0, -5); // resting on the floor
+      _steps(world, 30);
+      final crate = _ball(world, 100, -100); // in the air
+      b2w_setBodyEnabled(crate, 0);
+      b2w_setBodyEnabled(ball, 0);
+      b2w_setBodyEnabled(ball, 0); // already out: nothing
+      _steps(world, 1);
+      using((arena) {
+        final a = arena<Int64>(), b = arena<Int64>();
+        var ended = false;
+        for (var i = 0; i < b2w_getContactEndCount(world); i++) {
+          b2w_getContactEndEvent(world, i, a, b);
+          ended |= {a.value, b.value}.containsAll([floor, ball]);
+        }
+        expect(ended, isTrue, reason: 'its contact ends');
+        final found = arena<Int64>(4);
+        expect(
+          b2w_queryAABB(world, 90, -110, 110, -90, -1, -1, found, 4),
+          0,
+          reason: 'no query finds it',
+        );
+      });
+      _steps(world, 30);
+      final out = _read(crate);
+      expect(out.y, -100, reason: 'not falling');
+      expect(out.awake, isFalse);
+
+      b2w_setBodyEnabled(crate, 1);
+      final back = _read(crate);
+      expect(back.awake, isTrue);
+      expect(back.vy, 0, reason: 'back at rest');
+      _steps(world, 10);
+      expect(_read(crate).y, greaterThan(-100), reason: 'falling again');
+      b2w_setBodyEnabled(0, 0); // no body: nothing
     });
 
     test('a filter that rejects the floor lets a ball fall through', () {

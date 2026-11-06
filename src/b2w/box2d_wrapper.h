@@ -259,6 +259,16 @@ B2W_EXPORT void b2w_setBodySleepEnabled(int64_t bodyHandle, int32_t enabled);
 /// contacts. Its movement stays free.
 B2W_EXPORT void b2w_setBodyFixedRotation(int64_t bodyHandle, int32_t fixed);
 
+/// Take the body out of the simulation (enabled == 0) or put it back in
+/// (enabled != 0). Out of it, the body does not move, touches nothing (its
+/// contacts end, with end events, and the bodies it touched wake), is found
+/// by no query or mover, leaves every sensor it was in, and its joints hold
+/// nothing. It keeps its place, shapes and settings, but not its velocity:
+/// it comes back at rest, awake. Both ways are expensive (its shapes leave
+/// and rejoin the broad phase): fine for a body switched off, not for every
+/// step. A body already in that state is left alone.
+B2W_EXPORT void b2w_setBodyEnabled(int64_t bodyHandle, int32_t enabled);
+
 /// Give the body this mass instead of the one its shapes' density adds up
 /// to. The centre of mass stays where the shapes put it, and the rotational
 /// inertia scales with the mass, so the body turns as before. Call it after
@@ -297,40 +307,56 @@ B2W_EXPORT void b2w_getBodyMoveEvent(int64_t worldHandle, int32_t index,
 // ── Joints ───────────────────────────────────────────────────────────────────
 //
 // A joint holds two different bodies of the world. Anchors and axes are in
-// world space at the moment of creation. Each create returns the joint's
-// handle; 0 if a handle is dead or both are the same body. A joint goes with
-// either of its bodies; the two bodies do not collide with each other.
+// world space at the moment of creation, and the joint starts out satisfied:
+// it holds the bodies at the angle between them they have then (a weld or a
+// slider between bodies turned apart keeps them turned apart, and a hinge's
+// angle, which its limits are measured in, starts at 0). Each create returns
+// the joint's handle; 0 if a handle is dead or both are the same body. A
+// joint goes with either of its bodies.
+//
+// collideConnected != 0 lets the two bodies collide with each other; with 0
+// (Box2D's default) they pass through each other, and a contact they have
+// ends as the joint is made.
 
 /// A hinge: the bodies turn freely about the anchor they share.
 B2W_EXPORT int64_t b2w_createRevoluteJoint(int64_t worldHandle,
                                  int64_t bodyA, int64_t bodyB,
-                                 float anchorX, float anchorY);
+                                 float anchorX, float anchorY,
+                                 int32_t collideConnected);
 
 /// A slider: bodyB moves along the axis through the anchor, and the two do
 /// not turn against each other.
 B2W_EXPORT int64_t b2w_createPrismaticJoint(int64_t worldHandle,
                                   int64_t bodyA, int64_t bodyB,
                                   float anchorX, float anchorY,
-                                  float axisX,   float axisY);
+                                  float axisX,   float axisY,
+                                  int32_t collideConnected);
 
-/// A rope or rod between the two bodies' origins: their distance stays
-/// within [minLen, maxLen], free in between and rigid at the ends; equal
-/// lengths make a rigid rod. b2w_setDistanceSpring makes it springy.
+/// A rope or rod from (anchorAX, anchorAY) on bodyA to (anchorBX, anchorBY)
+/// on bodyB: the distance between the two points, which turn with their
+/// bodies, stays within [minLen, maxLen], free in between and rigid at the
+/// ends; equal lengths make a rigid rod. b2w_setDistanceSpring makes it
+/// springy.
 B2W_EXPORT int64_t b2w_createDistanceJoint(int64_t worldHandle,
                                  int64_t bodyA, int64_t bodyB,
-                                 float minLen, float maxLen);
+                                 float anchorAX, float anchorAY,
+                                 float anchorBX, float anchorBY,
+                                 float minLen, float maxLen,
+                                 int32_t collideConnected);
 
 /// Weld the bodies together at the anchor, as they are now.
 B2W_EXPORT int64_t b2w_createWeldJoint(int64_t worldHandle,
                               int64_t bodyA, int64_t bodyB,
-                              float anchorX, float anchorY);
+                              float anchorX, float anchorY,
+                              int32_t collideConnected);
 
 /// A wheel: bodyB turns freely about the anchor and moves on a spring along
 /// the axis (suspension; 4 Hz, damping ratio 0.7 until b2w_setWheelSpring).
 B2W_EXPORT int64_t b2w_createWheelJoint(int64_t worldHandle,
                                int64_t bodyA, int64_t bodyB,
                                float anchorX, float anchorY,
-                               float axisX,   float axisY);
+                               float axisX,   float axisY,
+                               int32_t collideConnected);
 
 /// Destroy a joint.
 B2W_EXPORT void b2w_destroyJoint(int64_t jointHandle);

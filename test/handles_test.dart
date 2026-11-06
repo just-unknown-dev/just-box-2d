@@ -75,7 +75,7 @@ void main() {
       final w = world();
       final a = body(w, 0);
       final b = body(w, 40);
-      final joint = box2d.b2w_createRevoluteJoint(w, a, b, 20, 0);
+      final joint = box2d.b2w_createRevoluteJoint(w, a, b, 20, 0, 0);
       final ground = box2d.b2w_createStaticBody(w, 0, 100, 0);
       final points = calloc<Float>(6);
       try {
@@ -98,7 +98,7 @@ void main() {
       final w = world();
       final a = body(w, 0);
       final b = body(w, 40);
-      final joint = box2d.b2w_createRevoluteJoint(w, a, b, 20, 0);
+      final joint = box2d.b2w_createRevoluteJoint(w, a, b, 20, 0, 0);
       box2d.b2w_destroyBody(a);
       box2d.b2w_destroyJoint(joint);
       box2d.b2w_destroyWorld(w);
